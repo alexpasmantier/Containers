@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::process::{Command, Stdio};
 
 use anyhow::Result;
 
@@ -7,13 +7,12 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
     let command = &args[3];
     let command_args = &args[4..];
-    let output = std::process::Command::new(command)
+    Command::new(command)
         .args(command_args)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .output()
-        .expect("failed to execute subprocess");
-
-    io::stdout().write_all(&output.stdout).unwrap();
-    io::stderr().write_all(&output.stderr).unwrap();
+        .expect("Failed to execute command");
 
     Ok(())
 }
