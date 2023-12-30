@@ -20,13 +20,22 @@ fn main() -> ExitCode {
     //     &arguments.command_arguments.join(" ")
     // );
 
+    // create temp dir for the container
     let bin_paths = vec![Path::new(DOCKER_EXPLORER)];
     let temp_dir = prepare_temp_dir(&bin_paths);
+
     // chroot into it
     let temp_dir_cstring = ffi::CString::new(temp_dir.path().to_str().unwrap()).unwrap();
     let chroot_result = unsafe { libc::chroot(temp_dir_cstring.as_ptr()) };
     if chroot_result != 0 {
         panic!("chroot failed with exit code {chroot_result}");
+    };
+
+    // create new pid namespace
+    let unshare_flags = libc::CLONE_NEWPID;
+    let unshare_result = unsafe { libc::unshare(unshare_flags) };
+    if unshare_result != 0 {
+        eprintln!("Failed to unshare");
     };
 
     let output = Command::new(arguments.command)
