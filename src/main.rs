@@ -1,15 +1,20 @@
-#![allow(dead_code, unused_variables)]
+use crate::containerization::prepare_temp_dir;
+use crate::parsing::arguments::parse_args;
+use containerization::{chroot, unshare};
 use core::panic;
-use libc;
+use registry::authentication::authenticate;
+use registry::layers::pull_layers;
+use registry::manifest::get_manifest;
 use std::io::{self, Write};
-use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
-use std::{ffi, fs};
-use tempfile::{tempdir, TempDir};
 
-const DOCKER_EXPLORER: &str = "/usr/local/bin/docker-explorer";
+mod containerization;
+mod parsing;
+mod registry;
 
-// Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
+const DOCKER_EXPLORER_PATH: &str = "/usr/local/bin/docker-explorer";
+const SH_PATH: &str = "/bin/sh";
+
 fn main() -> ExitCode {
     let args = std::env::args().collect();
     let arguments = parse_args(args);
@@ -20,21 +25,25 @@ fn main() -> ExitCode {
     //     &arguments.command_arguments.join(" ")
     // );
 
+    // authenticate to the registry
+    let auth = authenticate(&arguments.image).expect("Unable to authenticate to registry");
+    // get manifest
+    let manifest = get_manifest(&arguments.image, &auth).expect("Unable to get image manifest");
+    // pull image layers
+    let layers = pull_layers(&arguments.image, &manifest, &auth).expect("Unable to pull layers");
+
     // create temp dir for the container
-    let bin_paths = vec![Path::new(DOCKER_EXPLORER)];
-    let temp_dir = prepare_temp_dir(&bin_paths);
+    let bin_paths = [DOCKER_EXPLORER_PATH, SH_PATH];
+    let temp_dir = prepare_temp_dir(&bin_paths, layers);
 
     // chroot into it
-    let temp_dir_cstring = ffi::CString::new(temp_dir.path().to_str().unwrap()).unwrap();
-    let chroot_result = unsafe { libc::chroot(temp_dir_cstring.as_ptr()) };
+    let chroot_result = chroot(temp_dir.path().to_str().unwrap());
     if chroot_result != 0 {
         panic!("chroot failed with exit code {chroot_result}");
     };
 
     // create new pid namespace
-    let unshare_flags = libc::CLONE_NEWPID;
-    let unshare_result = unsafe { libc::unshare(unshare_flags) };
-    if unshare_result != 0 {
+    if unshare() != 0 {
         eprintln!("Failed to unshare");
     };
 
@@ -53,51 +62,4 @@ fn main() -> ExitCode {
     io::stderr().write_all(&output.stderr).unwrap();
 
     exit_code
-}
-
-#[derive(Debug)]
-struct Arguments {
-    image: String,
-    command: String,
-    command_arguments: Vec<String>,
-}
-
-fn parse_args(args: Vec<String>) -> Arguments {
-    let mut arguments = args.into_iter();
-    let executable = arguments.next().unwrap();
-    let docker_command = arguments
-        .next()
-        .expect("please provide a docker command to use");
-    let image = arguments.next().expect("please provide an image to run");
-    let command = arguments
-        .next()
-        .expect("please provide a command to run on your image");
-    Arguments {
-        image,
-        command,
-        command_arguments: arguments.collect(),
-    }
-}
-
-/// Creates a temporary directory, creates /dev/null inside it, and copies the given binaries as
-/// well
-fn prepare_temp_dir(bin_paths: &Vec<&Path>) -> TempDir {
-    let temp_dir = tempdir().expect("Failed to create temporary directory for the container");
-    // create /dev/null inside temp dir
-    fs::create_dir(temp_dir.path().join("dev")).expect("Failed to create dev/ inside temp dir");
-    fs::write(temp_dir.path().join("dev/null"), b"")
-        .expect("Failed to create dev/null inside temp dir");
-    // copy binaries
-    for bin_path in bin_paths {
-        let p = temp_dir.path().join(
-            bin_path
-                .strip_prefix("/")
-                .expect("Binary paths should be absolute"),
-        );
-        // create intermediary directories
-        fs::create_dir_all(p.parent().unwrap()).unwrap();
-        fs::copy(bin_path, p).expect(&format!("Unable to copy {:?} to temp dir", bin_path));
-    }
-
-    temp_dir
 }
