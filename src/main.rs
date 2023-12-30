@@ -1,10 +1,8 @@
 #![allow(dead_code, unused_variables)]
-use std::process::{Command, Stdio};
-
-use anyhow::Result;
+use std::process::{Command, ExitCode, Stdio};
 
 // Usage: your_docker.sh run <image> <command> <arg1> <arg2> ...
-fn main() -> Result<()> {
+fn main() -> ExitCode {
     let args = std::env::args().collect();
     let arguments = parse_args(args);
     // println!("Image: {}", &arguments.image);
@@ -14,14 +12,18 @@ fn main() -> Result<()> {
     //     &arguments.command_arguments.join(" ")
     // );
 
-    Command::new(arguments.command)
+    let output = Command::new(arguments.command)
         .args(arguments.command_arguments)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .output()
         .expect("Failed to execute command");
 
-    Ok(())
+    let exit_code = match output.status.code() {
+        Some(code) => ExitCode::from(code as u8),
+        None => ExitCode::from(0),
+    };
+    exit_code
 }
 
 #[derive(Debug)]
